@@ -542,11 +542,6 @@ class MigrationAutodetector:
                     if (getattr(field.remote_field, "through", None) and
                             not field.remote_field.through._meta.auto_created):
                         related_fields[field.name] = field
-            for field in model_opts.local_many_to_many:
-                if field.remote_field.model:
-                    related_fields[field.name] = field
-                if getattr(field.remote_field, "through", None) and not field.remote_field.through._meta.auto_created:
-                    related_fields[field.name] = field
             # Are there indexes/unique|index_together to defer?
             indexes = model_state.options.pop('indexes')
             constraints = model_state.options.pop('constraints')
@@ -733,11 +728,6 @@ class MigrationAutodetector:
                     if (getattr(field.remote_field, "through", None) and
                             not field.remote_field.through._meta.auto_created):
                         related_fields[field.name] = field
-            for field in model._meta.local_many_to_many:
-                if field.remote_field.model:
-                    related_fields[field.name] = field
-                if getattr(field.remote_field, "through", None) and not field.remote_field.through._meta.auto_created:
-                    related_fields[field.name] = field
             # Generate option removal first
             unique_together = model_state.options.pop('unique_together', None)
             index_together = model_state.options.pop('index_together', None)

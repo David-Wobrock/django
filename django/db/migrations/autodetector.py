@@ -484,7 +484,11 @@ class MigrationAutodetector:
                             dependencies = []
                             for _, field in model_state.fields:
                                 if field.is_relation:
-                                    dependencies.extend(self._get_dependencies_for_foreign_key(field))
+                                    dependencies.extend(
+                                        self._get_dependencies_for_foreign_key(
+                                            app_label, model_name, field, self.to_state
+                                        )
+                                    )
                             self.add_operation(
                                 app_label,
                                 operations.RenameModel(
@@ -589,7 +593,7 @@ class MigrationAutodetector:
 
             # Generate operations for each related field
             for name, field in sorted(related_fields.items()):
-                dependencies = self._get_dependencies_for_foreign_key(field)
+                dependencies = self._get_dependencies_for_foreign_key(app_label, model_name, field, self.to_state)
                 # Depend on our own model being created
                 dependencies.append((app_label, model_name, None, True))
                 # Make operation
@@ -856,7 +860,7 @@ class MigrationAutodetector:
         # Fields that are foreignkeys/m2ms depend on stuff
         dependencies = []
         if field.remote_field and field.remote_field.model:
-            dependencies.extend(self._get_dependencies_for_foreign_key(field))
+            dependencies.extend(self._get_dependencies_for_foreign_key(app_label, model_name, field, self.to_state))
         # You can't just add NOT NULL fields with no default or fields
         # which don't allow empty strings as default.
         time_fields = (models.DateField, models.DateTimeField, models.TimeField)
@@ -946,7 +950,9 @@ class MigrationAutodetector:
                         self.renamed_fields.get(rename_key + (to_field,), to_field)
                         for to_field in new_field.to_fields
                     ])
-                dependencies.extend(self._get_dependencies_for_foreign_key(new_field))
+                dependencies.extend(
+                    self._get_dependencies_for_foreign_key(app_label, model_name, new_field, self.to_state)
+                )
             if hasattr(new_field, "remote_field") and getattr(new_field.remote_field, "through", None):
                 rename_key = (
                     new_field.remote_field.through._meta.app_label,
@@ -1066,23 +1072,21 @@ class MigrationAutodetector:
                     )
                 )
 
-    def _get_dependencies_for_foreign_key(self, field):
+    @staticmethod
+    def _get_dependencies_for_foreign_key(app_label, model_name, field, project_state):
         # Account for FKs to swappable models
         swappable_setting = getattr(field, 'swappable_setting', None)
         if swappable_setting is not None:
             dep_app_label = "__setting__"
             dep_object_name = swappable_setting
         else:
-            dep_app_label = field.remote_field.model._meta.app_label
-            dep_object_name = field.remote_field.model._meta.object_name
+            dep_app_label, dep_object_name = resolve_model_key(app_label, model_name, field.remote_field.model)
         dependencies = [(dep_app_label, dep_object_name, None, True)]
-        if getattr(field.remote_field, "through", None) and not field.remote_field.through._meta.auto_created:
-            dependencies.append((
-                field.remote_field.through._meta.app_label,
-                field.remote_field.through._meta.object_name,
-                None,
-                True,
-            ))
+        if getattr(field.remote_field, "through", None):
+            through_app_label, through_object_name = resolve_model_key(app_label, model_name, field.remote_field.model)
+            through_model_state = project_state.models[through_app_label, through_object_name]
+            if not through_model_state.options.get("auto_created"):
+                dependencies.append((through_app_label, through_object_name, None, True))
         return dependencies
 
     def _generate_altered_foo_together(self, operation):
@@ -1111,7 +1115,9 @@ class MigrationAutodetector:
                     for field_name in foo_togethers:
                         field = new_model_state.get_field_by_name(field_name)
                         if field.remote_field and field.remote_field.model:
-                            dependencies.extend(self._get_dependencies_for_foreign_key(field))
+                            dependencies.extend(
+                                self._get_dependencies_for_foreign_key(app_label, model_name, field, self.to_state)
+                            )
 
                 self.add_operation(
                     app_label,

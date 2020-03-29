@@ -133,25 +133,23 @@ class MigrationAutodetector:
         self.new_model_keys = set()
         self.new_proxy_keys = set()
         self.new_unmanaged_keys = set()
-        for app_label, model_name in self.from_state.models:
-            model = self.old_apps.get_model(app_label, model_name)
-            if not model._meta.managed:
+        for (app_label, model_name), model_state in self.from_state.models.items():
+            if not model_state.options.get("managed", True):
                 self.old_unmanaged_keys.add((app_label, model_name))
             elif app_label not in self.from_state.real_apps:
-                if model._meta.proxy:
+                if model_state.options.get("proxy"):
                     self.old_proxy_keys.add((app_label, model_name))
                 else:
                     self.old_model_keys.add((app_label, model_name))
 
-        for app_label, model_name in self.to_state.models:
-            model = self.new_apps.get_model(app_label, model_name)
-            if not model._meta.managed:
+        for (app_label, model_name), model_state in self.to_state.models.items():
+            if not model_state.options.get("managed", True):
                 self.new_unmanaged_keys.add((app_label, model_name))
             elif (
                 app_label not in self.from_state.real_apps or
                 (convert_apps and app_label in convert_apps)
             ):
-                if model._meta.proxy:
+                if model_state.options.get("proxy"):
                     self.new_proxy_keys.add((app_label, model_name))
                 else:
                     self.new_model_keys.add((app_label, model_name))
@@ -448,11 +446,14 @@ class MigrationAutodetector:
         real way to solve #22783).
         """
         try:
-            model = self.new_apps.get_model(item[0], item[1])
-            base_names = [base.__name__ for base in model.__bases__]
+            model_state = self.to_state.models[item]
+            base_names = tuple(
+                base if isinstance(base, str) else base.__name__
+                for base in model_state.bases
+            )
             string_version = "%s.%s" % (item[0], item[1])
             if (
-                model._meta.swappable or
+                model_state.options.get("swappable") or
                 "AbstractUser" in base_names or
                 "AbstractBaseUser" in base_names or
                 settings.AUTH_USER_MODEL.lower() == string_version.lower()
@@ -482,9 +483,8 @@ class MigrationAutodetector:
                     rem_model_fields_def = self.only_relation_agnostic_fields(rem_model_state.fields)
                     if model_fields_def == rem_model_fields_def:
                         if self.questioner.ask_rename_model(rem_model_state, model_state):
-                            model_opts = self.new_apps.get_model(app_label, model_name)._meta
                             dependencies = []
-                            for field in model_opts.get_fields():
+                            for _, field in model_state.fields:
                                 if field.is_relation:
                                     dependencies.extend(self._get_dependencies_for_foreign_key(field))
                             self.add_operation(
@@ -527,17 +527,16 @@ class MigrationAutodetector:
         )
         for app_label, model_name in all_added_models:
             model_state = self.to_state.models[app_label, model_name]
-            model_opts = self.new_apps.get_model(app_label, model_name)._meta
             # Gather related fields
             related_fields = {}
             primary_key_rel = None
-            for field in model_opts.local_fields:
+            for field_name, field in model_state.fields:
                 if field.remote_field:
                     if field.remote_field.model:
                         if field.primary_key:
                             primary_key_rel = field.remote_field.model
                         elif not field.remote_field.parent_link:
-                            related_fields[field.name] = field
+                            related_fields[field_name] = field
                     # through will be none on M2Ms on swapped-out models;
                     # we can treat lack of through as auto_created=True, though.
                     if (getattr(field.remote_field, "through", None) and
@@ -586,7 +585,7 @@ class MigrationAutodetector:
             )
 
             # Don't add operations which modify the database for unmanaged models
-            if not model_opts.managed:
+            if not model_state.options.get("managed", True):
                 continue
 
             # Generate operations for each related field
@@ -723,13 +722,12 @@ class MigrationAutodetector:
         all_deleted_models = chain(sorted(deleted_models), sorted(deleted_unmanaged_models))
         for app_label, model_name in all_deleted_models:
             model_state = self.from_state.models[app_label, model_name]
-            model = self.old_apps.get_model(app_label, model_name)
             # Gather related fields
             related_fields = {}
-            for field in model._meta.local_fields:
+            for field_name, field in model_state.fields:
                 if field.remote_field:
                     if field.remote_field.model:
-                        related_fields[field.name] = field
+                        related_fields[field_name] = field
                     # through will be none on M2Ms on swapped-out models;
                     # we can treat lack of through as auto_created=True, though.
                     if (getattr(field.remote_field, "through", None) and
@@ -815,7 +813,8 @@ class MigrationAutodetector:
         for app_label, model_name, field_name in sorted(self.new_field_keys - self.old_field_keys):
             old_model_name = self.renamed_models.get((app_label, model_name), model_name)
             old_model_state = self.from_state.models[app_label, old_model_name]
-            field = self.new_apps.get_model(app_label, model_name)._meta.get_field(field_name)
+            new_model_state = self.to_state.models[app_label, old_model_name]
+            field = new_model_state.get_field_by_name(field_name)
             # Scan to see if this is actually a rename!
             field_dec = self.deep_deconstruct(field)
             for rem_app_label, rem_model_name, rem_field_name in sorted(self.old_field_keys - self.new_field_keys):
@@ -853,7 +852,7 @@ class MigrationAutodetector:
             self._generate_added_field(app_label, model_name, field_name)
 
     def _generate_added_field(self, app_label, model_name, field_name):
-        field = self.new_apps.get_model(app_label, model_name)._meta.get_field(field_name)
+        field = self.to_state.models[app_label, model_name].get_field_by_name(field_name)
         # Fields that are foreignkeys/m2ms depend on stuff
         dependencies = []
         if field.remote_field and field.remote_field.model:
@@ -913,8 +912,8 @@ class MigrationAutodetector:
             # Did the field change?
             old_model_name = self.renamed_models.get((app_label, model_name), model_name)
             old_field_name = self.renamed_fields.get((app_label, model_name, field_name), field_name)
-            old_field = self.old_apps.get_model(app_label, old_model_name)._meta.get_field(old_field_name)
-            new_field = self.new_apps.get_model(app_label, model_name)._meta.get_field(field_name)
+            old_field = self.from_state.models[app_label, old_model_name].get_field_by_name(old_field_name)
+            new_field = self.to_state.models[app_label, model_name].get_field_by_name(field_name)
             dependencies = []
             # Implement any model renames on relations; these are handled by RenameModel
             # so we need to exclude them from the comparison
@@ -1110,7 +1109,7 @@ class MigrationAutodetector:
                 dependencies = []
                 for foo_togethers in new_value:
                     for field_name in foo_togethers:
-                        field = self.new_apps.get_model(app_label, model_name)._meta.get_field(field_name)
+                        field = new_model_state.get_field_by_name(field_name)
                         if field.remote_field and field.remote_field.model:
                             dependencies.extend(self._get_dependencies_for_foreign_key(field))
 

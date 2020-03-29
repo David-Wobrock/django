@@ -12,6 +12,7 @@ from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.utils import (
     COMPILED_REGEX_TYPE, RegexObject, get_migration_name_timestamp,
 )
+from django.db.models.fields.related import resolve_model_key
 from django.utils.topological_sort import stable_topological_sort
 
 
@@ -225,14 +226,11 @@ class MigrationAutodetector:
             old_model_name = self.renamed_models.get((app_label, model_name), model_name)
             old_model_state = self.from_state.models[app_label, old_model_name]
             for field_name, field in old_model_state.fields:
-                old_field = self.old_apps.get_model(app_label, old_model_name)._meta.get_field(field_name)
-                if (hasattr(old_field, "remote_field") and getattr(old_field.remote_field, "through", None) and
-                        not old_field.remote_field.through._meta.auto_created):
-                    through_key = (
-                        old_field.remote_field.through._meta.app_label,
-                        old_field.remote_field.through._meta.model_name,
-                    )
-                    self.through_users[through_key] = (app_label, old_model_name, field_name)
+                if hasattr(field, 'remote_field') and getattr(field.remote_field, 'through', None):
+                    through_key = resolve_model_key(app_label, model_name, field.remote_field.through)
+                    through_model_state = self.from_state.models[through_key]
+                    if not through_model_state.options.get("auto_created"):
+                        self.through_users[through_key] = (app_label, old_model_name, field_name)
 
     @staticmethod
     def _resolve_dependency(dependency):
@@ -539,9 +537,15 @@ class MigrationAutodetector:
                             related_fields[field_name] = field
                     # through will be none on M2Ms on swapped-out models;
                     # we can treat lack of through as auto_created=True, though.
-                    if (getattr(field.remote_field, "through", None) and
-                            not field.remote_field.through._meta.auto_created):
-                        related_fields[field.name] = field
+                    if getattr(field.remote_field, "through", None):
+                        through_app_label, through_model_name = resolve_model_key(
+                            app_label,
+                            model_name,
+                            field.remote_field.through,
+                        )
+                        through_model_state = self.to_state.models[through_app_label, through_model_name]
+                        if not through_model_state.options.get("auto_created"):
+                            related_fields[field_name] = field
             # Are there indexes/unique|index_together to defer?
             indexes = model_state.options.pop('indexes')
             constraints = model_state.options.pop('constraints')
@@ -725,9 +729,15 @@ class MigrationAutodetector:
                         related_fields[field_name] = field
                     # through will be none on M2Ms on swapped-out models;
                     # we can treat lack of through as auto_created=True, though.
-                    if (getattr(field.remote_field, "through", None) and
-                            not field.remote_field.through._meta.auto_created):
-                        related_fields[field.name] = field
+                    if getattr(field.remote_field, "through", None):
+                        through_app_label, through_model_name = resolve_model_key(
+                            app_label,
+                            model_name,
+                            field.remote_field.through,
+                        )
+                        through_model_state = self.from_state.models[through_app_label, through_model_name]
+                        if not through_model_state.options.get("auto_created"):
+                            related_fields[field_name] = field
             # Generate option removal first
             unique_together = model_state.options.pop('unique_together', None)
             index_together = model_state.options.pop('index_together', None)

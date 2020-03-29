@@ -34,6 +34,19 @@ from .reverse_related import (
 RECURSIVE_RELATIONSHIP_CONSTANT = 'self'
 
 
+def resolve_model_key(app_label, model_name, relation):
+    if relation == RECURSIVE_RELATIONSHIP_CONSTANT:
+        return app_label, model_name
+
+    if isinstance(relation, str):
+        if '.' in relation:
+            return tuple(relation.lower().split('.')[:2])
+        return app_label, relation.lower()
+
+    opts = relation._meta
+    return opts.app_label, opts.model_name
+
+
 def resolve_relation(scope_model, relation):
     """
     Transform relation into a model or fully-qualified model string of the form

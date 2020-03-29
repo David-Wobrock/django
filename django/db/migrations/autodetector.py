@@ -567,12 +567,14 @@ class MigrationAutodetector:
                     dependencies.append((base_app_label, base_name, None, True))
             # Depend on the other end of the primary key if it's a relation
             if primary_key_rel:
-                dependencies.append((
-                    primary_key_rel._meta.app_label,
-                    primary_key_rel._meta.object_name,
-                    None,
-                    True
-                ))
+                dependencies.append(
+                    resolve_model_key(
+                        app_label, model_name, primary_key_rel
+                    ) + (
+                        None,
+                        True
+                    )
+                )
             # Generate creation operation
             self.add_operation(
                 app_label,
@@ -922,10 +924,7 @@ class MigrationAutodetector:
             # Implement any model renames on relations; these are handled by RenameModel
             # so we need to exclude them from the comparison
             if hasattr(new_field, "remote_field") and getattr(new_field.remote_field, "model", None):
-                rename_key = (
-                    new_field.remote_field.model._meta.app_label,
-                    new_field.remote_field.model._meta.model_name,
-                )
+                rename_key = resolve_model_key(app_label, model_name, new_field.remote_field.model)
                 if rename_key in self.renamed_models:
                     new_field.remote_field.model = old_field.remote_field.model
                 # Handle ForeignKey which can only have a single to_field.
@@ -954,10 +953,7 @@ class MigrationAutodetector:
                     self._get_dependencies_for_foreign_key(app_label, model_name, new_field, self.to_state)
                 )
             if hasattr(new_field, "remote_field") and getattr(new_field.remote_field, "through", None):
-                rename_key = (
-                    new_field.remote_field.through._meta.app_label,
-                    new_field.remote_field.through._meta.model_name,
-                )
+                rename_key = resolve_model_key(app_label, model_name, new_field.remote_field.through)
                 if rename_key in self.renamed_models:
                     new_field.remote_field.through = old_field.remote_field.through
             old_field_dec = self.deep_deconstruct(old_field)

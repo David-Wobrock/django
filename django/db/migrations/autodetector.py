@@ -155,6 +155,9 @@ class MigrationAutodetector:
                 else:
                     self.new_model_keys.add((app_label, model_name))
 
+        self.from_state.resolve_fields_and_relations()
+        self.to_state.resolve_fields_and_relations()
+
         # Renames have to come first
         self.generate_renamed_models()
 
@@ -482,7 +485,7 @@ class MigrationAutodetector:
                     if model_fields_def == rem_model_fields_def:
                         if self.questioner.ask_rename_model(rem_model_state, model_state):
                             dependencies = []
-                            for _, field in model_state.fields:
+                            for field in model_state.all_fields:
                                 if field.is_relation:
                                     dependencies.extend(
                                         self._get_dependencies_for_foreign_key(

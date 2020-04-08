@@ -1,11 +1,14 @@
 import copy
+from collections import defaultdict
 from contextlib import contextmanager
 
 from django.apps import AppConfig
 from django.apps.registry import Apps, apps as global_apps
 from django.conf import settings
 from django.db import models
-from django.db.models.fields.related import RECURSIVE_RELATIONSHIP_CONSTANT
+from django.db.models.fields.related import (
+    RECURSIVE_RELATIONSHIP_CONSTANT, resolve_model_key,
+)
 from django.db.models.options import DEFAULT_NAMES, normalize_together
 from django.db.models.utils import make_model_tuple
 from django.utils.functional import cached_property
@@ -87,6 +90,8 @@ class ProjectState:
         # Apps to include from main registry, usually unmigrated ones
         self.real_apps = real_apps or []
         self.is_delayed = False
+        # Attributes filled after calling resolve_fields_and_relations
+        self.relations = None
 
     def add_model(self, model_state):
         app_label, model_name = model_state.app_label, model_state.name_lower
@@ -187,6 +192,89 @@ class ProjectState:
 
         # Render all models
         self.apps.render_multiple(states_to_be_rendered)
+
+    def resolve_fields_and_relations(self):
+        for model_state in self.models.values():
+            for field_name, field in model_state.fields:
+                field.name = field_name
+                field.model = "{}.{}".format(model_state.app_label, model_state.name)
+                if field.remote_field and field.remote_field.model:
+                    self.fill_remote_field_name(field)
+
+        self.relations = defaultdict(lambda: defaultdict(list))
+        concretes, proxies = self._get_concrete_models_mapping_and_proxy_models()
+
+        real_apps = set(self.real_apps)
+        for model_key in concretes:
+            model_state = self.models[model_key]
+            for field_name, field in model_state.fields:
+                remote_field = field.remote_field
+                if remote_field:
+                    remote_model_key = resolve_model_key(*model_key, remote_field.model)
+                    if remote_model_key[0] not in real_apps and remote_model_key in concretes:
+                        remote_model_key = concretes[remote_model_key]
+                    self.relations[remote_model_key][model_key].append((field_name, field))
+
+                    through = getattr(remote_field, 'through', None)
+                    if through and not model_state.options.get('auto_created'):
+                        through_model_key = resolve_model_key(*model_key, through)
+                        if through_model_key[0] not in real_apps:
+                            through_model_key = concretes[through_model_key]
+                        self.relations[through_model_key][model_key].append((field_name, field))
+        for model_key in proxies:
+            self.relations[model_key] = self.relations[concretes[model_key]]
+
+    def fill_remote_field_name(self, field):
+        if self.is_swappable_model(field.remote_field.model):
+            field.remote_field.field_name = "id"
+        else:
+            try:
+                model_state = self.get_concrete_model_state(field.remote_field.model)
+                base = model_state.bases[0]
+                if not isinstance(base, str) and base.__name__ == "Model":
+                    field.remote_field.field_name = model_state.get_primary_key_field_name()
+                    model_state.all_fields.add(field.remote_field)
+                else:
+                    base_model_state = self.get_concrete_model_state(base)
+                    field.remote_field.field_name = '%s_ptr' % base_model_state.name_lower
+                    base_model_state.all_fields.add(field.remote_field)
+            except KeyError:
+                pass  # not migrated
+
+    def is_swappable_model(self, model):
+        return model == settings.AUTH_USER_MODEL
+
+    def get_concrete_model_state(self, model):
+        return self.models[self.get_concrete_model_key(model)]
+
+    def get_concrete_model_key(self, model):
+        concrete_models_mapping, _ = self._get_concrete_models_mapping_and_proxy_models()
+        model_key = make_model_tuple(model)
+        return concrete_models_mapping[model_key]
+
+    def _get_concrete_models_mapping_and_proxy_models(self):
+        concrete_models_mapping = {}
+        proxy_models = {}
+
+        # Split known models to proxy and concrete models
+        for model_key, model_state in self.models.items():
+            if model_state.options.get('proxy'):
+                proxy_models[model_key] = model_state
+            else:
+                concrete_models_mapping[model_key] = model_key
+
+        for model_key, model_state in proxy_models.items():
+            concrete_models_mapping[model_key] = self._find_concrete_model_from_proxy(proxy_models, model_state)
+        return concrete_models_mapping, proxy_models
+
+    def _find_concrete_model_from_proxy(self, proxy_models, model_state):
+        for base in model_state.bases:
+            base_key = make_model_tuple(base)
+            base_state = proxy_models.get(base_key)
+            if not base_state:
+                # Concrete model found, stop looking at bases
+                return base_key
+            return self._find_concrete_model_from_proxy(proxy_models, base_state)
 
     def clone(self):
         """Return an exact copy of this ProjectState."""
@@ -360,6 +448,7 @@ class ModelState:
         self.app_label = app_label
         self.name = name
         self.fields = fields
+        self.all_fields = {f for _, f in fields}
         self.options = options or {}
         self.options.setdefault('indexes', [])
         self.options.setdefault('constraints', [])
@@ -370,7 +459,7 @@ class ModelState:
             raise ValueError("ModelState.fields cannot be a dict - it must be a list of 2-tuples.")
         for name, field in fields:
             # Sanity-check that fields are NOT already bound to a model.
-            if hasattr(field, 'model'):
+            if hasattr(field, 'model') and not isinstance(field.model, str):
                 raise ValueError(
                     'ModelState.fields cannot be bound to a model - "%s" is.' % name
                 )
@@ -593,6 +682,12 @@ class ModelState:
             if constraint.name == name:
                 return constraint
         raise ValueError('No constraint named %s on model %s' % (name, self.name))
+
+    def get_primary_key_field_name(self):
+        for field_name, field in self.fields:
+            if field.primary_key:
+                return field_name
+        raise ValueError("No primary key on model %s" % self.name)
 
     def __repr__(self):
         return "<%s: '%s.%s'>" % (self.__class__.__name__, self.app_label, self.name)

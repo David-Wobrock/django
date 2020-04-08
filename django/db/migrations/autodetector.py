@@ -668,17 +668,20 @@ class MigrationAutodetector:
 
             # Fix relationships if the model changed from a proxy model to a
             # concrete model.
+            relations = self.to_state.relations
             if (app_label, model_name) in self.old_proxy_keys:
-                for related_object in model_opts.related_objects:
-                    self.add_operation(
-                        related_object.related_model._meta.app_label,
-                        operations.AlterField(
-                            model_name=related_object.related_model._meta.object_name,
-                            name=related_object.field.name,
-                            field=related_object.field,
-                        ),
-                        dependencies=[(app_label, model_name, None, True)],
-                    )
+                for related_model_key, related_fields in relations[app_label, model_name].items():
+                    related_model_state = self.to_state.models[related_model_key]
+                    for related_field_name, related_field in related_fields:
+                        self.add_operation(
+                            related_model_state.app_label,
+                            operations.AlterField(
+                                model_name=related_model_state.name,
+                                name=related_field_name,
+                                field=related_field,
+                            ),
+                            dependencies=[(app_label, model_name, None, True)],
+                        )
 
     def generate_created_proxies(self):
         """
@@ -780,13 +783,14 @@ class MigrationAutodetector:
             # and the removal of all its own related fields, and if it's
             # a through model the field that references it.
             dependencies = []
-            for related_object in model._meta.related_objects:
-                related_object_app_label = related_object.related_model._meta.app_label
-                object_name = related_object.related_model._meta.object_name
-                field_name = related_object.field.name
-                dependencies.append((related_object_app_label, object_name, field_name, False))
-                if not related_object.many_to_many:
-                    dependencies.append((related_object_app_label, object_name, field_name, "alter"))
+            relations = self.from_state.relations
+            for (related_object_app_label, object_name), relation_related_fields in (
+                relations[app_label, model_name].items()
+            ):
+                for field_name, field in relation_related_fields:
+                    dependencies.append((related_object_app_label, object_name, field_name, False))
+                    if not field.many_to_many:
+                        dependencies.append((related_object_app_label, object_name, field_name, "alter"))
 
             for name in sorted(related_fields):
                 dependencies.append((app_label, model_name, name, False))

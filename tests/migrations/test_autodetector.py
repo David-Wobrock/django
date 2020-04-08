@@ -584,9 +584,14 @@ class AutodetectorTests(TestCase):
         return project_state
 
     def get_changes(self, before_states, after_states, questioner=None):
+        if not isinstance(before_states, ProjectState):
+            before_states = self.make_project_state(before_states)
+        if not isinstance(after_states, ProjectState):
+            after_states = self.make_project_state(after_states)
+
         return MigrationAutodetector(
-            self.make_project_state(before_states),
-            self.make_project_state(after_states),
+            before_states,
+            after_states,
             questioner,
         )._detect_changes()
 
@@ -1014,7 +1019,7 @@ class AutodetectorTests(TestCase):
             'renamed_foo',
             'django.db.models.ForeignKey',
             [],
-            {'to': 'app.foo', 'on_delete': models.CASCADE, 'db_column': 'foo_id'},
+            {'to': 'app.foo', 'on_delete': models.CASCADE, 'db_column': 'foo_id', 'to_field': 'id'},
         ))
 
     def test_rename_model(self):
@@ -1633,20 +1638,24 @@ class AutodetectorTests(TestCase):
 
     def test_proxy_to_mti_with_fk_to_proxy(self):
         # First, test the pk table and field name.
+        to_state = self.make_project_state([self.author_empty, self.author_proxy_third, self.book_proxy_fk])
         changes = self.get_changes(
             [],
-            [self.author_empty, self.author_proxy_third, self.book_proxy_fk],
+            to_state,
         )
+
+        fk_field = changes['otherapp'][0].operations[0].fields[2][1]
         self.assertEqual(
-            changes['otherapp'][0].operations[0].fields[2][1].remote_field.model._meta.db_table,
-            'testapp_author',
+            to_state.get_concrete_model_key(fk_field.remote_field.model),
+            ('testapp', 'author'),
         )
-        self.assertEqual(changes['otherapp'][0].operations[0].fields[2][1].remote_field.field_name, 'id')
+        self.assertEqual(fk_field.remote_field.field_name, 'id')
 
         # Change AuthorProxy to use MTI.
+        to_state = self.make_project_state([self.author_empty, self.author_proxy_third_notproxy, self.book_proxy_fk])
         changes = self.get_changes(
             [self.author_empty, self.author_proxy_third, self.book_proxy_fk],
-            [self.author_empty, self.author_proxy_third_notproxy, self.book_proxy_fk],
+            to_state,
         )
         # Right number/type of migrations for the AuthorProxy model?
         self.assertNumberMigrations(changes, 'thirdapp', 1)
@@ -1658,29 +1667,37 @@ class AutodetectorTests(TestCase):
         # otherapp should depend on thirdapp.
         self.assertMigrationDependencies(changes, 'otherapp', 0, [('thirdapp', 'auto_1')])
         # Now, test the pk table and field name.
+        fk_field = changes['otherapp'][0].operations[0].field
         self.assertEqual(
-            changes['otherapp'][0].operations[0].field.remote_field.model._meta.db_table,
-            'thirdapp_authorproxy',
+            to_state.get_concrete_model_key(fk_field.remote_field.model),
+            ('thirdapp', 'authorproxy'),
         )
-        self.assertEqual(changes['otherapp'][0].operations[0].field.remote_field.field_name, 'author_ptr')
+        self.assertEqual(fk_field.remote_field.field_name, 'author_ptr')
 
     def test_proxy_to_mti_with_fk_to_proxy_proxy(self):
         # First, test the pk table and field name.
+        to_state = self.make_project_state(
+            [self.author_empty, self.author_proxy, self.author_proxy_proxy, self.book_proxy_proxy_fk]
+        )
         changes = self.get_changes(
             [],
-            [self.author_empty, self.author_proxy, self.author_proxy_proxy, self.book_proxy_proxy_fk],
+            to_state,
         )
+        fk_field = changes['otherapp'][0].operations[0].fields[1][1]
         self.assertEqual(
-            changes['otherapp'][0].operations[0].fields[1][1].remote_field.model._meta.db_table,
-            'testapp_author',
+            to_state.get_concrete_model_key(fk_field.remote_field.model),
+            ('testapp', 'author'),
         )
-        self.assertEqual(changes['otherapp'][0].operations[0].fields[1][1].remote_field.field_name, 'id')
+        self.assertEqual(fk_field.remote_field.field_name, 'id')
 
         # Change AuthorProxy to use MTI. FK still points to AAuthorProxyProxy,
         # a proxy of AuthorProxy.
+        to_state = self.make_project_state(
+            [self.author_empty, self.author_proxy_notproxy, self.author_proxy_proxy, self.book_proxy_proxy_fk]
+        )
         changes = self.get_changes(
             [self.author_empty, self.author_proxy, self.author_proxy_proxy, self.book_proxy_proxy_fk],
-            [self.author_empty, self.author_proxy_notproxy, self.author_proxy_proxy, self.book_proxy_proxy_fk],
+            to_state,
         )
         # Right number/type of migrations for the AuthorProxy model?
         self.assertNumberMigrations(changes, 'testapp', 1)
@@ -1692,11 +1709,12 @@ class AutodetectorTests(TestCase):
         # otherapp should depend on testapp.
         self.assertMigrationDependencies(changes, 'otherapp', 0, [('testapp', 'auto_1')])
         # Now, test the pk table and field name.
+        fk_field = changes['otherapp'][0].operations[0].field
         self.assertEqual(
-            changes['otherapp'][0].operations[0].field.remote_field.model._meta.db_table,
-            'testapp_authorproxy',
+            to_state.get_concrete_model_key(fk_field.remote_field.model),
+            ('testapp', 'authorproxy'),
         )
-        self.assertEqual(changes['otherapp'][0].operations[0].field.remote_field.field_name, 'author_ptr')
+        self.assertEqual(fk_field.remote_field.field_name, 'author_ptr')
 
     def test_unmanaged_create(self):
         """The autodetector correctly deals with managed models."""
@@ -1768,11 +1786,8 @@ class AutodetectorTests(TestCase):
         self.assertOperationTypes(changes, 'testapp', 0, ["AlterField"])
         self.assertOperationAttributes(changes, 'testapp', 0, 0, model_name="author", name='user')
         fk_field = changes['testapp'][0].operations[0].field
-        to_model = '%s.%s' % (
-            fk_field.remote_field.model._meta.app_label,
-            fk_field.remote_field.model._meta.object_name,
-        )
-        self.assertEqual(to_model, 'thirdapp.CustomUser')
+        self.assertEqual(fk_field.remote_field.model, 'thirdapp.CustomUser')
+        self.assertEqual(fk_field.remote_field.field_name, 'id')
 
     def test_add_field_with_default(self):
         """#22030 - Adding a field with a default should work."""

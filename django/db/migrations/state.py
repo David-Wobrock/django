@@ -230,7 +230,7 @@ class ProjectState:
             try:
                 model_state = self.get_concrete_model_state(field.remote_field.model)
                 base = model_state.bases[0]
-                if not isinstance(base, str) and base.__name__ == "Model":
+                if not isinstance(base, str):
                     field.remote_field.field_name = model_state.get_primary_key_field_name()
                     model_state.all_fields.add(field.remote_field)
                 else:

@@ -10,9 +10,8 @@ from django.db.migrations.operations.models import AlterModelOptions
 from django.db.migrations.optimizer import MigrationOptimizer
 from django.db.migrations.questioner import MigrationQuestioner
 from django.db.migrations.utils import (
-    COMPILED_REGEX_TYPE, RegexObject, get_migration_name_timestamp,
+    COMPILED_REGEX_TYPE, RegexObject, get_migration_name_timestamp, resolve_relation,
 )
-from django.db.models.fields.related import resolve_model_key
 from django.utils.topological_sort import stable_topological_sort
 
 
@@ -228,7 +227,7 @@ class MigrationAutodetector:
             old_model_state = self.from_state.models[app_label, old_model_name]
             for field_name, field in old_model_state.fields:
                 if hasattr(field, 'remote_field') and getattr(field.remote_field, 'through', None):
-                    through_key = resolve_model_key(app_label, model_name, field.remote_field.through)
+                    through_key = resolve_relation(field.remote_field.through, app_label, model_name)
                     through_model_state = self.from_state.models[through_key]
                     if not through_model_state.options.get("auto_created"):
                         self.through_users[through_key] = (app_label, old_model_name, field_name)
@@ -543,10 +542,10 @@ class MigrationAutodetector:
                     # through will be none on M2Ms on swapped-out models;
                     # we can treat lack of through as auto_created=True, though.
                     if getattr(field.remote_field, "through", None):
-                        through_app_label, through_model_name = resolve_model_key(
+                        through_app_label, through_model_name = resolve_relation(
+                            field.remote_field.through,
                             app_label,
                             model_name,
-                            field.remote_field.through,
                         )
                         through_model_state = self.to_state.models[through_app_label, through_model_name]
                         if not through_model_state.options.get("auto_created"):
@@ -569,8 +568,8 @@ class MigrationAutodetector:
             # Depend on the other end of the primary key if it's a relation
             if primary_key_rel:
                 dependencies.append(
-                    resolve_model_key(
-                        app_label, model_name, primary_key_rel
+                    resolve_relation(
+                        primary_key_rel, app_label, model_name,
                     ) + (
                         None,
                         True
@@ -740,10 +739,10 @@ class MigrationAutodetector:
                     # through will be none on M2Ms on swapped-out models;
                     # we can treat lack of through as auto_created=True, though.
                     if getattr(field.remote_field, "through", None):
-                        through_app_label, through_model_name = resolve_model_key(
+                        through_app_label, through_model_name = resolve_relation(
+                            field.remote_field.through,
                             app_label,
                             model_name,
-                            field.remote_field.through,
                         )
                         through_model_state = self.from_state.models[through_app_label, through_model_name]
                         if not through_model_state.options.get("auto_created"):
@@ -929,7 +928,7 @@ class MigrationAutodetector:
             # Implement any model renames on relations; these are handled by RenameModel
             # so we need to exclude them from the comparison
             if hasattr(new_field, "remote_field") and getattr(new_field.remote_field, "model", None):
-                rename_key = resolve_model_key(app_label, model_name, new_field.remote_field.model)
+                rename_key = resolve_relation(new_field.remote_field.model, app_label, model_name)
                 if rename_key in self.renamed_models:
                     new_field.remote_field.model = old_field.remote_field.model
                 # Handle ForeignKey which can only have a single to_field.
@@ -958,7 +957,7 @@ class MigrationAutodetector:
                     self._get_dependencies_for_foreign_key(app_label, model_name, new_field, self.to_state)
                 )
             if hasattr(new_field, "remote_field") and getattr(new_field.remote_field, "through", None):
-                rename_key = resolve_model_key(app_label, model_name, new_field.remote_field.through)
+                rename_key = resolve_relation(new_field.remote_field.through, app_label, model_name)
                 if rename_key in self.renamed_models:
                     new_field.remote_field.through = old_field.remote_field.through
             old_field_dec = self.deep_deconstruct(old_field)
@@ -1081,10 +1080,10 @@ class MigrationAutodetector:
             dep_app_label = "__setting__"
             dep_object_name = swappable_setting
         else:
-            dep_app_label, dep_object_name = resolve_model_key(app_label, model_name, field.remote_field.model)
+            dep_app_label, dep_object_name = resolve_relation(field.remote_field.model, app_label, model_name)
         dependencies = [(dep_app_label, dep_object_name, None, True)]
         if getattr(field.remote_field, "through", None):
-            through_app_label, through_object_name = resolve_model_key(app_label, model_name, field.remote_field.model)
+            through_app_label, through_object_name = resolve_relation(field.remote_field.model, app_label, model_name)
             through_model_state = project_state.models[through_app_label, through_object_name]
             if not through_model_state.options.get("auto_created"):
                 dependencies.append((through_app_label, through_object_name, None, True))

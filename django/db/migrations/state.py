@@ -6,9 +6,7 @@ from django.apps import AppConfig
 from django.apps.registry import Apps, apps as global_apps
 from django.conf import settings
 from django.db import models
-from django.db.models.fields.related import (
-    RECURSIVE_RELATIONSHIP_CONSTANT, resolve_model_key,
-)
+from django.db.models.fields.related import RECURSIVE_RELATIONSHIP_CONSTANT
 from django.db.models.options import DEFAULT_NAMES, normalize_together
 from django.db.models.utils import make_model_tuple
 from django.utils.functional import cached_property
@@ -16,6 +14,7 @@ from django.utils.module_loading import import_string
 from django.utils.version import get_docs_version
 
 from .exceptions import InvalidBasesError
+from .utils import resolve_relation
 
 
 def _get_app_label_and_model_name(model, app_label=''):
@@ -210,14 +209,14 @@ class ProjectState:
             for field_name, field in model_state.fields:
                 remote_field = field.remote_field
                 if remote_field:
-                    remote_model_key = resolve_model_key(*model_key, remote_field.model)
+                    remote_model_key = resolve_relation(remote_field.model, *model_key)
                     if remote_model_key[0] not in real_apps and remote_model_key in concretes:
                         remote_model_key = concretes[remote_model_key]
                     self.relations[remote_model_key][model_key].append((field_name, field))
 
                     through = getattr(remote_field, 'through', None)
                     if through and not model_state.options.get('auto_created'):
-                        through_model_key = resolve_model_key(*model_key, through)
+                        through_model_key = resolve_relation(through, *model_key)
                         if through_model_key[0] not in real_apps:
                             through_model_key = concretes[through_model_key]
                         self.relations[through_model_key][model_key].append((field_name, field))

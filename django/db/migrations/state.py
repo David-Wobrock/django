@@ -215,7 +215,7 @@ class ProjectState:
                     self.relations[remote_model_key][model_key].append((field_name, field))
 
                     through = getattr(remote_field, 'through', None)
-                    if through and not model_state.options.get('auto_created'):
+                    if through:
                         through_model_key = resolve_relation(through, *model_key)
                         if through_model_key[0] not in real_apps:
                             through_model_key = concretes[through_model_key]

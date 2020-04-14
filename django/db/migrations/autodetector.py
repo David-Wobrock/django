@@ -228,9 +228,7 @@ class MigrationAutodetector:
             for field_name, field in old_model_state.fields:
                 if hasattr(field, 'remote_field') and getattr(field.remote_field, 'through', None):
                     through_key = resolve_relation(field.remote_field.through, app_label, model_name)
-                    through_model_state = self.from_state.models[through_key]
-                    if not through_model_state.options.get("auto_created"):
-                        self.through_users[through_key] = (app_label, old_model_name, field_name)
+                    self.through_users[through_key] = (app_label, old_model_name, field_name)
 
     @staticmethod
     def _resolve_dependency(dependency):
@@ -547,9 +545,7 @@ class MigrationAutodetector:
                             app_label,
                             model_name,
                         )
-                        through_model_state = self.to_state.models[through_app_label, through_model_name]
-                        if not through_model_state.options.get("auto_created"):
-                            related_fields[field_name] = field
+                        related_fields[field_name] = field
             # Are there indexes/unique|index_together to defer?
             indexes = model_state.options.pop('indexes')
             constraints = model_state.options.pop('constraints')
@@ -744,9 +740,7 @@ class MigrationAutodetector:
                             app_label,
                             model_name,
                         )
-                        through_model_state = self.from_state.models[through_app_label, through_model_name]
-                        if not through_model_state.options.get("auto_created"):
-                            related_fields[field_name] = field
+                        related_fields[field_name] = field
             # Generate option removal first
             unique_together = model_state.options.pop('unique_together', None)
             index_together = model_state.options.pop('index_together', None)
@@ -1084,9 +1078,7 @@ class MigrationAutodetector:
         dependencies = [(dep_app_label, dep_object_name, None, True)]
         if getattr(field.remote_field, "through", None):
             through_app_label, through_object_name = resolve_relation(field.remote_field.model, app_label, model_name)
-            through_model_state = project_state.models[through_app_label, through_object_name]
-            if not through_model_state.options.get("auto_created"):
-                dependencies.append((through_app_label, through_object_name, None, True))
+            dependencies.append((through_app_label, through_object_name, None, True))
         return dependencies
 
     def _generate_altered_foo_together(self, operation):

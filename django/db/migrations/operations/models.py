@@ -4,11 +4,11 @@ from django.db.migrations.state import ModelState
 from django.db.models.options import normalize_together
 from django.utils.functional import cached_property
 
+from ..utils import resolve_relation
 from .fields import (
     AddField, AlterField, FieldOperation, RemoveField, RenameField,
 )
 from .utils import field_references, get_references
-from ..utils import resolve_relation
 
 
 def _check_for_duplicates(arg_name, objs):
